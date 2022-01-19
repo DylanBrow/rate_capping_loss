@@ -20,7 +20,7 @@ Disruption at the top and bottom of the exhibits is grouped to eliminate small v
 * `RATE_CHANGE_GRANULARITY_FOR_EXHIBIT` - Width of disruption bands in Exhibit A.
 * `MAX_SOURCE_VALUE` - Max value eligible to be printed on the y-axis of the left graph in Exhibit A.
 
-⚠️ Note: Be careful to set the correct as of date and exposure window (previous year) when pulling data from FFA!
+⚠️ **Note:** Be careful to set the correct as of date and exposure window (previous year) when pulling data from FFA!
 
 #### Exhibits / Example
 
