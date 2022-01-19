@@ -211,9 +211,6 @@ output_by_quote_id = df %>%
 write.csv(output_by_quote_id, "output_by_quote_id.csv")
 ```
 
-```{r}
-p = ggplot(multiplicative_rate_change, aes(lr_modifier))
-```
 
 
 
