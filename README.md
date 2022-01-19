@@ -1,7 +1,7 @@
 # Rate Capping Worksheet Loss Forecast
 
 ### `sql/base_lr.sql`
-`sql/base_lr.sql` computes the base loss ratios by tenure that are used in the original version of the worksheet. These are the loss ratios to which the relativities computed in `disruption_LRR.Rmd` are to be applied.
+`sql/base_lr.sql` computes the base loss ratios by tenure that are used in the original version of the worksheet. These are the loss ratios to which the relativities computed in `disruption_LRR.Rmd` are to be applied. These loss ratios are derived from the six-month rolling OLLR with tenure assumptions applied (15% t1 → t2, 3% thereafter through t5).
 
 ### `disruption_LRR.Rmd`
 `disruption_LRR.Rmd` does the following:
