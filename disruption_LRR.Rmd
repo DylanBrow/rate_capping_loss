@@ -1,0 +1,246 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+install.packages("scam")
+```
+
+```{r}
+library(odbc)
+library(tidyverse)
+library(mgcv)
+library(scam)
+data_warehouse = dbConnect(drv = odbc::odbc(), "data_warehouse")
+```
+
+```{r}
+tic()
+raw_data_tab = read.csv("~/rate_capping_tool/md_raw_data.csv", stringsAsFactors = F)
+toc()
+```
+
+```{sql, connection = data_warehouse, output.var = ffa_result}
+select
+  policy_term_revision_id,
+  r.quote_id,
+  r.number_of_vehicles,
+  sum(case when combined_symbol = 'pd' then earned_car_years else 0 end) as pd_ecy,
+  sum(case when combined_symbol = 'pd' then earned_car_years else 0 end) / r.number_of_vehicles as epy,
+  sum(earned_premium_dollar_amount) as ep,
+  sum(earned_on_level_premium_dollar_amount) as olep,
+  sum(cls_ultimate_net_of_salsub_dollar_amount) as cls_ult
+from edw.fact_financials_accumulating ffa
+join edw.dim_policy_term_revision using (policy_term_revision_k)
+join edw.dim_coverage using (coverage_k)
+join edw.dim_market using (market_k)
+JOIN edw.dim_rate r ON r.rate_k = ffa.actual_rate_k AND r.actual_rate_indicator = 1
+where short_name = 'MD'
+and as_of_date_k = 20211231
+and exposure_month_k >= 202101
+group by 1,2,3
+having ep > 0
+```
+
+
+```{r, fig.width=8}
+##############
+# PARAMETERS #
+##############
+MIN_RATE_CHANGE_FOR_CUVE_EXHIBIT = 0.0
+MAX_RATE_CHANGE_FOR_CUVE_EXHIBIT = 2.0
+RATE_CHANGE_GRANULARITY_FOR_EXHIBIT = 0.1
+
+impact = raw_data_tab %>% 
+  group_by(quote_id) %>% 
+  summarise(
+    source_premium = sum(source_premium, na.rm = T),
+    target_premium = sum(target_premium, na.rm = T)
+  ) %>% 
+  mutate(rate_change = target_premium / source_premium)
+
+# There was a weird blank row at the top of the file when importing the .csv
+if(sum(is.na(impact$rate_change)) == 1) impact = impact %>% filter(!is.na(rate_change))
+
+MAX_RATE_CHANGE = max(impact$rate_change)
+
+df = ffa_result %>% 
+  mutate(cls_ult = round(cls_ult, 2)) %>% 
+  inner_join(
+    impact %>% select(quote_id, source_premium, rate_change), 
+    on="policy_term_revision_id"
+  ) %>% 
+  mutate(
+    source_ep = epy * source_premium,
+    ollr = cls_ult / olep,
+    source_lr = cls_ult / source_ep,
+    source_lr_rel = (cls_ult / source_ep) / (sum(cls_ult) / sum(source_ep)),
+    abs_rc = rate_change - 1 ,
+    rate_change_bucket = cut(
+      rate_change, 
+      breaks = unique(c(0, seq(
+        from = MIN_RATE_CHANGE_FOR_CUVE_EXHIBIT, 
+        to = MAX_RATE_CHANGE_FOR_CUVE_EXHIBIT,
+        by = RATE_CHANGE_GRANULARITY_FOR_EXHIBIT), 
+        MAX_RATE_CHANGE
+        ))
+      )
+  ) %>%
+  filter(cls_ult >= 0) # This should be very few records, occurs when paid salvage / subro exceeds paid loss.
+
+
+# This is a package I found to fit a monotonic spline in a GAM.
+model = scam(
+  source_lr ~ s(rate_change, bs="mpi"),
+  family=Tweedie(p=1.5, link = power(0)), 
+  weights = source_ep, 
+  data = df
+)
+summary(model)
+
+df$fit_source_lr = exp(predict(model, df))
+
+chart = df %>% 
+  mutate(predicted_source_loss = fit_source_lr * source_ep) %>% 
+  group_by(rate_change_bucket) %>% 
+  summarise(
+    Source = sum(cls_ult) / sum(source_ep),
+    Fit = sum(predicted_source_loss) / sum(source_ep)
+  ) %>% 
+  melt(id.vars = "rate_change_bucket")
+
+overall_lr = sum(df$cls_ult) / sum(df$source_ep, na.rm = T)
+
+#####
+# Set max value for Source to display (can be noisy)
+MAX_SOURCE_VALUE = 2.5
+chart = chart %>% filter(!((variable == "Source") & (value > MAX_SOURCE_VALUE)))
+#####
+
+p1 = ggplot(chart, aes(x = rate_change_bucket, y = value, color = variable, group = variable)) +
+  geom_point() + 
+  geom_line() + 
+  theme_linedraw() + 
+  labs(
+    x = "Rate Change",
+    y = "Loss Ratio",
+    color = "Loss Ratio Type"
+  ) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  geom_hline(yintercept = overall_lr, linetype = "dotted")
+
+print(p1)
+```
+
+
+```{r, fig.width=14, fig.height=5}
+overall_lr = sum(df$cls_ult) / sum(df$source_ep, na.rm = T)
+
+p2 = ggplot(chart, aes(x = rate_change_bucket, y = value / overall_lr, color = variable, group = variable)) +
+  geom_point() + 
+  geom_line() + 
+  theme_linedraw() + 
+  labs(
+    x = "Rate Change",
+    y = "Loss Ratio Relativity",
+    color = "Loss Ratio Type",
+    title = "Loss Ratio Relativity Modifier by Disruption Band"
+  ) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) + 
+  geom_hline(yintercept = 1, linetype = "dotted")
+
+chart3 = df %>% 
+  group_by(rate_change_bucket) %>% 
+  summarise(source_ep = sum(source_ep))
+
+p3 = ggplot(chart3, aes(x = rate_change_bucket, y = source_ep)) + 
+  geom_col() + 
+  theme_linedraw() + 
+  labs(
+    x = "Rate Change",
+    y = "Total Source EP",
+    title = "Source EP Distribution on Considered Exposures"
+  ) + 
+  theme(axis.text.x = element_text(angle = 90)) 
+
+gridExtra::grid.arrange(p2, p3, nrow = 1)
+```
+
+
+
+```{r}
+# This exhibit was not used in the implementation in the worksheet, but I've left this cell in case anyone's curious.
+overall_lr = sum(df$cls_ult) / sum(df$source_ep)
+
+chart4 = data.frame(rate_change = seq(from = 0, to = MAX_RATE_CHANGE_FOR_CUVE_EXHIBIT, by = 0.1))
+chart4$lr_modifier = predict(model, chart4)
+chart4$lr_modifier = exp(chart4$lr_modifier) / overall_lr
+chart4 = chart4 %>% 
+  rename(multiplicative_rate_change := rate_change) %>% 
+  mutate(absolute_rate_change = multiplicative_rate_change - 1) %>% 
+  select(multiplicative_rate_change, absolute_rate_change, lr_modifier)
+
+p = ggplot(chart4, aes(x = multiplicative_rate_change, y = lr_modifier)) + 
+  geom_point() + 
+  geom_line() +
+  theme_linedraw() + 
+  geom_hline(yintercept = 1, linetype = "dotted") + 
+  labs(
+    x = "Multiplicative Rate Change",
+    y = "Loss Ratio Modifier",
+    title = "Lookup Table"
+  )
+
+print(p)
+```
+
+```{r}
+write.csv(chart4, "table_output.csv")
+```
+```{r}
+output_by_quote_id = df %>% 
+  mutate(absolute_rate_change = rate_change - 1) %>% 
+  select(
+    quote_id,
+    multiplicative_rate_change = rate_change, 
+    absolute_rate_change,
+    lr_modifier = fit_source_lr / overall_lr
+  ) 
+
+write.csv(output_by_quote_id, "output_by_quote_id.csv")
+```
+
+```{r}
+p = ggplot(multiplicative_rate_change, aes(lr_modifier))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
