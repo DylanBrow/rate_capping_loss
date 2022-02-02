@@ -4,43 +4,49 @@ output: html_notebook
 ---
 
 ```{r}
-install.packages("scam")
+install.packages(c("RPostgres", "mgcv", "tidyverse", "scam", "reshape", "gridExtra"))
 ```
 
 ```{r}
-library(odbc)
+library(RPostgres)
 library(tidyverse)
 library(mgcv)
 library(scam)
-data_warehouse = dbConnect(drv = odbc::odbc(), "data_warehouse")
+library(reshape)
+library(gridExtra)
 ```
 
 ```{r}
-tic()
-raw_data_tab = read.csv("~/rate_capping_tool/md_raw_data.csv", stringsAsFactors = F)
-toc()
+raw_data_tab = read.csv("/Users/stephensegroves/Documents/projects/rate_capping_loss/example/md_raw_data.csv", stringsAsFactors = F)
 ```
 
-```{sql, connection = data_warehouse, output.var = ffa_result}
-select
-  policy_term_revision_id,
-  r.quote_id,
-  r.number_of_vehicles,
-  sum(case when combined_symbol = 'pd' then earned_car_years else 0 end) as pd_ecy,
-  sum(case when combined_symbol = 'pd' then earned_car_years else 0 end) / r.number_of_vehicles as epy,
-  sum(earned_premium_dollar_amount) as ep,
-  sum(earned_on_level_premium_dollar_amount) as olep,
-  sum(cls_ultimate_net_of_salsub_dollar_amount) as cls_ult
-from edw.fact_financials_accumulating ffa
-join edw.dim_policy_term_revision using (policy_term_revision_k)
-join edw.dim_coverage using (coverage_k)
-join edw.dim_market using (market_k)
-JOIN edw.dim_rate r ON r.rate_k = ffa.actual_rate_k AND r.actual_rate_indicator = 1
-where short_name = 'MD'
-and as_of_date_k = 20211231
-and exposure_month_k >= 202101
-group by 1,2,3
-having ep > 0
+```{r}
+config <- "~/.pg_service.conf"
+
+con <- dbConnect(RPostgres::Postgres(),
+                 service = 'dw',
+                 sslmode = 'require')
+
+ffa_result <- dbGetQuery(con,
+  "select
+    policy_term_revision_id,
+    r.quote_id,
+    r.number_of_vehicles,
+    sum(case when combined_symbol = 'pd' then earned_car_years else 0 end) as pd_ecy,
+    sum(case when combined_symbol = 'pd' then earned_car_years else 0 end) / r.number_of_vehicles as epy,
+    sum(earned_premium_dollar_amount) as ep,
+    sum(earned_on_level_premium_dollar_amount) as olep,
+    sum(cls_ultimate_net_of_salsub_dollar_amount) as cls_ult
+  from edw.fact_financials_accumulating ffa
+  join edw.dim_policy_term_revision using (policy_term_revision_k)
+  join edw.dim_coverage using (coverage_k)
+  join edw.dim_market using (market_k)
+  JOIN edw.dim_rate r ON r.rate_k = ffa.actual_rate_k AND r.actual_rate_indicator = 1
+  where short_name = 'MD'
+  and as_of_date_k = 20211231
+  and exposure_month_k >= 202101
+  group by 1,2,3
+  having ep > 0")
 ```
 
 
@@ -69,7 +75,7 @@ df = ffa_result %>%
   mutate(cls_ult = round(cls_ult, 2)) %>% 
   inner_join(
     impact %>% select(quote_id, source_premium, rate_change), 
-    on="policy_term_revision_id"
+    by="quote_id"
   ) %>% 
   mutate(
     source_ep = epy * source_premium,
@@ -107,8 +113,9 @@ chart = df %>%
   summarise(
     Source = sum(cls_ult) / sum(source_ep),
     Fit = sum(predicted_source_loss) / sum(source_ep)
-  ) %>% 
-  melt(id.vars = "rate_change_bucket")
+  )
+
+chart = melt(as.data.frame(chart), id.vars = "rate_change_bucket")
 
 overall_lr = sum(df$cls_ult) / sum(df$source_ep, na.rm = T)
 
@@ -177,11 +184,10 @@ chart4 = data.frame(rate_change = seq(from = 0, to = MAX_RATE_CHANGE_FOR_CUVE_EX
 chart4$lr_modifier = predict(model, chart4)
 chart4$lr_modifier = exp(chart4$lr_modifier) / overall_lr
 chart4 = chart4 %>% 
-  rename(multiplicative_rate_change := rate_change) %>% 
-  mutate(absolute_rate_change = multiplicative_rate_change - 1) %>% 
-  select(multiplicative_rate_change, absolute_rate_change, lr_modifier)
+  mutate(absolute_rate_change = rate_change - 1) %>% 
+  select(rate_change, absolute_rate_change, lr_modifier)
 
-p = ggplot(chart4, aes(x = multiplicative_rate_change, y = lr_modifier)) + 
+p = ggplot(chart4, aes(x = rate_change, y = lr_modifier)) + 
   geom_point() + 
   geom_line() +
   theme_linedraw() + 
@@ -196,19 +202,22 @@ print(p)
 ```
 
 ```{r}
-write.csv(chart4, "table_output.csv")
+write.csv(chart4, "/Users/stephensegroves/Documents/projects/rate_capping_loss/example/table_output_test.csv")
 ```
+
 ```{r}
-output_by_quote_id = df %>% 
+impact$lr_modifier = exp(predict(model, impact)) / overall_lr
+
+output_by_quote_id = impact %>% 
   mutate(absolute_rate_change = rate_change - 1) %>% 
   select(
     quote_id,
     multiplicative_rate_change = rate_change, 
     absolute_rate_change,
-    lr_modifier = fit_source_lr / overall_lr
+    lr_modifier
   ) 
 
-write.csv(output_by_quote_id, "output_by_quote_id.csv")
+write.csv(output_by_quote_id, "/Users/stephensegroves/Documents/projects/rate_capping_loss/example/output_by_quote_id_test.csv")
 ```
 
 
