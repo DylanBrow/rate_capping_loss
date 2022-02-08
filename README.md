@@ -11,6 +11,19 @@
 4. Uses this fit to get a loss ratio relativity that can then be used to segment the forecast loss ratio by premium disruption.
 5. Outputs the loss ratio relativity predictions in both a lookup table (visualized in Exhibit B) and by `quote_id`.
 
+#### State Update Instructions
+Update the cell containing the header "User-defined Inputs"
+
+#### SQL Connection
+1. Ensure there is a config file in the path "~/.pg_service.conf"
+2. Here is how to structure your config file:
+    [dw]
+    host=data-warehouse.joinroot.com
+    port=5439
+    dbname=root
+    user=<your Redshift username>
+    password=<your Redshift password>
+
 #### Parameters
 
 Disruption at the top and bottom of the exhibits is grouped to eliminate small volume bands.
