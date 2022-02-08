@@ -17,7 +17,16 @@ library(gridExtra)
 ```
 
 ```{r}
+#######################
+# User-defined Inputs #
+#######################
 raw_data_tab = read.csv("/Users/stephensegroves/Documents/projects/rate_capping_loss/example/md_raw_data.csv", stringsAsFactors = F)
+
+input_state = "'MD'"
+as_of_date = 20211231
+first_exposure_month_of_input_pif = 202101
+
+output_location = "/Users/stephensegroves/Documents/projects/rate_capping_loss/example/output_by_quote_id_test.csv"
 ```
 
 ```{r}
@@ -28,7 +37,8 @@ con <- dbConnect(RPostgres::Postgres(),
                  sslmode = 'require')
 
 ffa_result <- dbGetQuery(con,
-  "select
+  paste(
+    "select
     policy_term_revision_id,
     r.quote_id,
     r.number_of_vehicles,
@@ -42,11 +52,11 @@ ffa_result <- dbGetQuery(con,
   join edw.dim_coverage using (coverage_k)
   join edw.dim_market using (market_k)
   JOIN edw.dim_rate r ON r.rate_k = ffa.actual_rate_k AND r.actual_rate_indicator = 1
-  where short_name = 'MD'
-  and as_of_date_k = 20211231
-  and exposure_month_k >= 202101
-  group by 1,2,3
-  having ep > 0")
+  where short_name = ", input_state,
+  "and as_of_date_k = ", as_of_date,
+  "and exposure_month_k >= ", first_exposure_month_of_input_pif,
+  "group by 1,2,3
+  having ep > 0", sep=" "))
 ```
 
 
@@ -202,10 +212,6 @@ print(p)
 ```
 
 ```{r}
-write.csv(chart4, "/Users/stephensegroves/Documents/projects/rate_capping_loss/example/table_output_test.csv")
-```
-
-```{r}
 impact$lr_modifier = exp(predict(model, impact)) / overall_lr
 
 output_by_quote_id = impact %>% 
@@ -217,7 +223,7 @@ output_by_quote_id = impact %>%
     lr_modifier
   ) 
 
-write.csv(output_by_quote_id, "/Users/stephensegroves/Documents/projects/rate_capping_loss/example/output_by_quote_id_test.csv")
+write.csv(output_by_quote_id, output_location)
 ```
 
 
