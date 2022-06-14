@@ -20,25 +20,29 @@ library(gridExtra)
 #######################
 # User-defined Inputs #
 #######################
-raw_data_tab = read.csv("/Users/stephensegroves/Documents/projects/rate_capping_loss/example/md_raw_data.csv", stringsAsFactors = F)
+raw_data_tab = read.csv("G:/My Drive/State Filings/Utah/Auto/2022.02/Work/Impacts/Rate Capping/raw_data/raw_data_tab.csv", stringsAsFactors = F)
 
-input_state = "'MD'"
-as_of_date = 20211231
-first_exposure_month_of_input_pif = 202101
+input_state = "UT"
+as_of_date = 20211231 # This should match date used in impacts to generate rate capping file
+first_exposure_month_of_input_pif = 202101 # Ideally we'd want at least a year of loss data
 
-output_location = "/Users/stephensegroves/Documents/projects/rate_capping_loss/example/output_by_quote_id_test.csv"
+output_location = "G:/My Drive/State Filings/Utah/Auto/2022.02/Work/Impacts/Rate Capping/raw_data//output_by_quote_id_test.csv"
 ```
 
 ```{r}
 config <- "~/.pg_service.conf"
 
-con <- dbConnect(RPostgres::Postgres(),
-                 service = 'dw',
-                 sslmode = 'require')
+con <- dbConnect(odbc::odbc(), 'data_warehouse') # You may need to change data connection name
 
+# If the above doesn't work out, you can also try this:
+#con <- dbConnect(RPostgres::Postgres(),
+#                 service = 'dw',
+#                 sslmode = 'require')
+
+# May take 30 seconds to run
 ffa_result <- dbGetQuery(con,
-  paste(
-    "select
+  str_glue(
+  "select
     policy_term_revision_id,
     r.quote_id,
     r.number_of_vehicles,
@@ -52,11 +56,11 @@ ffa_result <- dbGetQuery(con,
   join edw.dim_coverage using (coverage_k)
   join edw.dim_market using (market_k)
   JOIN edw.dim_rate r ON r.rate_k = ffa.actual_rate_k AND r.actual_rate_indicator = 1
-  where short_name = ", input_state,
-  "and as_of_date_k = ", as_of_date,
-  "and exposure_month_k >= ", first_exposure_month_of_input_pif,
-  "group by 1,2,3
-  having ep > 0", sep=" "))
+  where short_name        = '{input_state}'
+    and as_of_date_k      = {as_of_date}
+    and exposure_month_k >= {first_exposure_month_of_input_pif}
+  group by 1,2,3
+  having ep > 0"))
 ```
 
 
